@@ -45,7 +45,7 @@ log = logging.getLogger("uzdubanime")
 TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 SUPER_ADMIN_ID = int(os.environ.get("SUPER_ADMIN_ID", "0") or 0)
 POST_CHANNEL = "@animeb_uz"
-SITE_URL = "https://musayeva951.github.io/animed-site/"
+SITE_URL = "https://musayeva951.github.io/uzbek-animelar-olami/"
 OLD_SITE_URL = "https://animed-uz.netlify.app"
 
 ADMIN_USERNAME = "@umid_ss7"
@@ -206,7 +206,8 @@ def _mtproto_get_size(file_id: str) -> int:
  BC_TEXT,
  POST_KOD, AD_ADD, AD_DEL, CH_ADD, CH_DEL, PCH_ADD, PCH_DEL,
  ANI_INFO, PREM_GIVE,
- SITE_BG, SITE_MUSIC) = range(27)
+ SITE_BG, SITE_MUSIC,
+ SHORT_KOD, SHORT_VIDEO, SHORT_TITLE, SHORT_DEL_ID) = range(31)
 
 # ============================== BAZA ==============================
 
@@ -266,6 +267,11 @@ def init_db() -> None:
     cur.execute("""CREATE TABLE IF NOT EXISTS chat_messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER, username TEXT, text TEXT, created_at TEXT)""")
+    # Shorts: admin yuklagan qisqa videolar (botga joylangan animelar uchun)
+    cur.execute("""CREATE TABLE IF NOT EXISTS anime_shorts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        anime_kod INTEGER, file_id TEXT, file_size INTEGER DEFAULT 0,
+        sarlavha TEXT DEFAULT '', yaratilgan TEXT DEFAULT '')""")
     conn.commit()
     conn.close()
 
@@ -505,6 +511,7 @@ ADMIN_BUTTONS = [
     "➕ Anime Qo'shish", "✏️ Anime Tahrirlash",
     "🎞 Qism Qo'shish", "🗑 Qismlarni Tozalash",
     "🔄 Qismni Almashtirish",
+    "🎬 Short Qo'shish", "🗑 Short O'chirish",
     "📋 Anime Ro'yxati", "📊 Statistika",
     "📢 Post Joylash", "📣 Broadcast",
     "🎁 Premium Berish", "👑 Admin Qo'shish",
@@ -545,6 +552,7 @@ def admin_keyboard() -> ReplyKeyboardMarkup:
             ["➕ Anime Qo'shish", "✏️ Anime Tahrirlash"],
             ["🎞 Qism Qo'shish", "🗑 Qismlarni Tozalash"],
             ["🔄 Qismni Almashtirish"],
+            ["🎬 Short Qo'shish", "🗑 Short O'chirish"],
             ["📋 Anime Ro'yxati", "📊 Statistika"],
             ["📢 Post Joylash", "📣 Broadcast"],
             ["🎁 Premium Berish", "👑 Admin Qo'shish"],
@@ -817,6 +825,28 @@ async def admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE, text:
         await update.message.reply_text("🔢 Qismini almashtirmoqchi bo'lgan anime <b>botdagi kodini (raqamini)</b> kiriting:",
                                         parse_mode=ParseMode.HTML, reply_markup=back_keyboard())
         return EP_REP_KOD
+
+    if text == "🎬 Short Qo'shish":
+        await update.message.reply_text("🔢 Short qo'shmoqchi bo'lgan anime <b>botdagi kodini (raqamini)</b> kiriting:",
+                                        parse_mode=ParseMode.HTML, reply_markup=back_keyboard())
+        return SHORT_KOD
+
+    if text == "🗑 Short O'chirish":
+        conn = _db()
+        rows = conn.execute(
+            "SELECT s.id, s.anime_kod, s.sarlavha, a.title FROM anime_shorts s "
+            "LEFT JOIN animelar a ON a.kod = s.anime_kod ORDER BY s.id DESC LIMIT 30"
+        ).fetchall()
+        conn.close()
+        if not rows:
+            await update.message.reply_text("😔 Hali short yo'q.")
+            return ConversationHandler.END
+        txt = "<b>🗑 Shortlar ro'yxati:</b>\n\n" + "\n".join(
+            f"🆔 {r['id']} • Kod {r['anime_kod']} • {(r['title'] or '')} — {(r['sarlavha'] or '')}".strip()
+            for r in rows)
+        await update.message.reply_text(txt + "\n\nO'chirmoqchi bo'lgan shortning <b>ID raqamini</b> yuboring:",
+                                        parse_mode=ParseMode.HTML, reply_markup=back_keyboard())
+        return SHORT_DEL_ID
 
     if text == "📋 Anime Ro'yxati":
         await anime_list(update, context)
@@ -1246,6 +1276,89 @@ async def ep_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"(tugatgan bo'lsangiz «{BACK_BUTTON}» ni bosing):",
         parse_mode=ParseMode.HTML, reply_markup=back_keyboard())
     return EP_VIDEO
+
+
+# ============================== ADMIN: SHORT QO'SHISH / O'CHIRISH ==============================
+# Admin botga joylangan anime uchun alohida qisqa video (short) yuklaydi.
+# Sayt /api/shorts orqali shu shortlarni ko'rsatadi.
+
+async def short_kod(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message.text:
+        return SHORT_KOD
+    kod = update.message.text.strip()
+    conn = _db()
+    anime = conn.execute("SELECT title FROM animelar WHERE kod = ?", (kod,)).fetchone()
+    conn.close()
+    if not anime:
+        await update.message.reply_text("❌ Anime topilmadi!")
+        return ConversationHandler.END
+    context.user_data["short_kod"] = kod
+    context.user_data["short_title"] = anime["title"]
+    await update.message.reply_text(
+        f"🎬 <b>{anime['title']}</b>\n\n📹 Short videosini yuboring (qisqa video):",
+        parse_mode=ParseMode.HTML, reply_markup=back_keyboard())
+    return SHORT_VIDEO
+
+
+async def short_video_warn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ Iltimos, faqat video yuboring!")
+    return SHORT_VIDEO
+
+
+async def short_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message.video:
+        await update.message.reply_text("❌ Iltimos, faqat video yuboring!")
+        return SHORT_VIDEO
+    context.user_data["short_file_id"] = update.message.video.file_id
+    context.user_data["short_file_size"] = update.message.video.file_size or 0
+    await update.message.reply_text(
+        "✏️ Short uchun <b>sarlavha</b> yozing (o'tkazib yuborish uchun — yuboring):",
+        parse_mode=ParseMode.HTML, reply_markup=back_keyboard())
+    return SHORT_TITLE
+
+
+async def short_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    raw = (update.message.text or "").strip()
+    # Admin kiritgan sarlavhadagi HTML teglarni tozalaymiz (XSS dan himoya; sayt baribir esc() qiladi)
+    sarlavha = re.sub(r"<[^>]*>", "", raw)[:200] if raw != "—" else ""
+    kod = context.user_data.get("short_kod")
+    fid = context.user_data.get("short_file_id")
+    fsize = context.user_data.get("short_file_size") or 0
+    if not kod or not fid:
+        await update.message.reply_text("❌ Ma'lumot topilmadi. Qaytadan boshlang.")
+        return ConversationHandler.END
+    conn = _db()
+    cur = conn.execute(
+        "INSERT INTO anime_shorts (anime_kod, file_id, file_size, sarlavha, yaratilgan) VALUES (?, ?, ?, ?, ?)",
+        (kod, fid, fsize, sarlavha, datetime.now().strftime(DATETIME_FMT)))
+    short_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    await update.message.reply_text(
+        f"✅ Short saqlandi! ID: <b>{short_id}</b>\n🎬 Anime: <b>{context.user_data.get('short_title', kod)}</b>",
+        parse_mode=ParseMode.HTML, reply_markup=admin_keyboard())
+    return ConversationHandler.END
+
+
+async def short_del_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message.text:
+        return SHORT_DEL_ID
+    try:
+        sid = int(update.message.text.strip())
+    except ValueError:
+        await update.message.reply_text("❌ ID raqam bo'lishi kerak!")
+        return ConversationHandler.END
+    conn = _db()
+    cur = conn.execute("DELETE FROM anime_shorts WHERE id = ?", (sid,))
+    conn.commit()
+    n = cur.rowcount
+    conn.close()
+    if n:
+        await update.message.reply_text(f"✅ Short o'chirildi! ID: <b>{sid}</b>",
+                                        parse_mode=ParseMode.HTML, reply_markup=admin_keyboard())
+    else:
+        await update.message.reply_text("❌ Bu ID bilan short topilmadi!")
+    return ConversationHandler.END
 
 
 # ============================== ADMIN: QISMNI ALMASHTIRISH ==============================
@@ -2101,6 +2214,11 @@ def build_app():
             EP_REP_QISM: [menu_first, MessageHandler(txt, ep_rep_qism)],
             EP_REP_VIDEO: [menu_first, MessageHandler(filters.VIDEO, ep_rep_video),
                            MessageHandler(txt, ep_rep_video_warn)],
+            SHORT_KOD: [menu_first, MessageHandler(txt, short_kod)],
+            SHORT_VIDEO: [menu_first, MessageHandler(filters.VIDEO, short_video),
+                          MessageHandler(txt, short_video_warn)],
+            SHORT_TITLE: [menu_first, MessageHandler(txt, short_title)],
+            SHORT_DEL_ID: [menu_first, MessageHandler(txt, short_del_id)],
             EDIT_KOD: [menu_first, MessageHandler(txt, edit_kod)],
             EDIT_TITLE: [menu_first, MessageHandler(txt, edit_title)],
             EDIT_VIDEO: [menu_first, MessageHandler(filters.VIDEO, edit_video),
@@ -2274,6 +2392,43 @@ def _api_anime_detail(kod):
             "poster": "/api/poster/%d" % r["kod"],
             "qismlar": [e["qism_raqam"] for e in eps],
         }
+    finally:
+        con.close()
+
+
+def _api_shorts_list():
+    con = _api_db()
+    try:
+        rows = con.execute(
+            "SELECT s.id, s.anime_kod, s.sarlavha, s.yaratilgan, a.title "
+            "FROM anime_shorts s LEFT JOIN animelar a ON a.kod = s.anime_kod "
+            "ORDER BY s.id DESC"
+        ).fetchall()
+        out = []
+        for r in rows:
+            out.append({
+                "id": r["id"],
+                "anime_kod": r["anime_kod"],
+                "anime_title": r["title"] or "",
+                "sarlavha": r["sarlavha"] or "",
+                "yaratilgan": r["yaratilgan"] or "",
+                "video": "/api/shorts/video/%d" % r["id"],
+                "poster": "/api/poster/%d" % r["anime_kod"],
+            })
+        return out
+    finally:
+        con.close()
+
+
+def _api_short_file(short_id):
+    con = _api_db()
+    try:
+        row = con.execute(
+            "SELECT file_id, file_size FROM anime_shorts WHERE id = ?", (short_id,)
+        ).fetchone()
+        if not row:
+            return None, 0
+        return row["file_id"], row["file_size"] or 0
     finally:
         con.close()
 
@@ -2506,6 +2661,21 @@ class _ApiHandler(BaseHTTPRequestHandler):
             if not file_id:
                 return self._send(404, _json.dumps({"ok": False}))
             return self._proxy_telegram_file(file_id, file_size, kod, qism)
+        elif path == "/api/shorts":
+            try:
+                self._send(200, _json.dumps(
+                    {"ok": True, "shorts": _api_shorts_list()}, ensure_ascii=False))
+            except Exception:
+                self._send(500, _json.dumps({"ok": False}))
+        elif path.startswith("/api/shorts/video/"):
+            try:
+                sid = int(path.rsplit("/", 1)[-1])
+            except ValueError:
+                return self._send(404, _json.dumps({"ok": False}))
+            file_id, file_size = _api_short_file(sid)
+            if not file_id:
+                return self._send(404, _json.dumps({"ok": False}))
+            return self._proxy_telegram_file(file_id, file_size)
         elif path.startswith("/api/poster/"):
             try:
                 kod = int(path.rsplit("/", 1)[-1])
