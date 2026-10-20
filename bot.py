@@ -884,8 +884,8 @@ async def admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE, text:
         ])
         await update.message.reply_text(
             "<b>🌐 Sayt sozlamalari:</b>\n\n"
-            f"🖼 Fon rasmi: {'✅ o\u2018rnatilgan' if bg_id else '❌ yo\u2018q'}\n"
-            f"🎵 Musiqa: {'✅ ' + (mus_name or 'o\u2018rnatilgan') if mus_id else '❌ yo\u2018q'}\n\n"
+            f"🖼 Fon rasmi: {'✅ o‘rnatilgan' if bg_id else '❌ yo‘q'}\n"
+            f"🎵 Musiqa: {'✅ ' + (mus_name or 'o‘rnatilgan') if mus_id else '❌ yo‘q'}\n\n"
             "Amalni tanlang:",
             parse_mode=ParseMode.HTML, reply_markup=kb)
         return ConversationHandler.END
