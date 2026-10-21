@@ -6,7 +6,7 @@ Imkoniyatlar:
   • Kod orqali anime qidiruv + deep-link (/start <kod>)
   • Bo'limlar: filmlar / ongoing / tugatigan / premium / barchasi
   • 🌐 AniList jonli ma'lumot qidiruv (poster, reyting, treyler)
-  • 🎞 Shorts — trend anime treylerlari
+  • 🎞 Shorts — admin yuklagan qisqa videolar (tagida Tomosha qilish tugmasi)
   • Majburiy obuna (kanallar bazadan)
   • Premium tizim (1/2 oylik, chek → admin tasdiq)
   • Serial qismlari (5 tadan tugmalar, hammasini yuklash)
@@ -389,17 +389,6 @@ query ($id: Int) {
 }
 """
 
-SHORTS_QUERY = """
-{
-  Page(page: 1, perPage: 10) {
-    media(type: ANIME, sort: TRENDING_DESC) {
-      title { romaji english }
-      trailer { id site }
-    }
-  }
-}
-"""
-
 STATUS_UZ = {
     "FINISHED": "✅ Tugagan",
     "RELEASING": "📡 Hozir chiqyapti",
@@ -634,27 +623,34 @@ async def list_anime(update: Update, sarlavha: str, where: str, params: tuple = 
 
 
 async def shorts_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Trend anime treylerlari (Shorts)."""
-    wait = await update.message.reply_text("🎞 Trend treylerlar yuklanmoqda...")
-    try:
-        data = await anilist(SHORTS_QUERY)
-        media = (data.get("Page") or {}).get("media") or []
-    except Exception as e:
-        log.warning("Shorts xato: %s", e)
-        await wait.edit_text("❌ Yuklashda xatolik. Keyinroq urinib ko'ring.")
+    """Admin yuklagan shortlar: har biri video bo'lib chiqadi,
+    tagida o'sha animeni ochadigan "Tomosha qilish" tugmasi bilan."""
+    conn = _db()
+    rows = conn.execute(
+        "SELECT s.file_id, s.sarlavha, s.anime_kod, a.title FROM anime_shorts s "
+        "LEFT JOIN animelar a ON a.kod = s.anime_kod ORDER BY s.id DESC LIMIT 10"
+    ).fetchall()
+    conn.close()
+    if not rows:
+        await update.message.reply_text(
+            "😔 Hali short yo'q. Admin short yuklagach, shu yerda chiqadi.")
         return ConversationHandler.END
-    kb = []
-    for m in media:
-        tr = m.get("trailer") or {}
-        if tr.get("site") == "youtube" and tr.get("id"):
-            kb.append([InlineKeyboardButton(
-                f"🎬 {al_title(m)}", url=f"https://www.youtube.com/watch?v={tr['id']}")])
-    if not kb:
-        await wait.edit_text("😔 Hozircha treylerlar topilmadi.")
-        return ConversationHandler.END
-    await wait.edit_text("<b>🎞 Trend anime treylerlari:</b>",
-                         parse_mode=ParseMode.HTML,
-                         reply_markup=InlineKeyboardMarkup(kb))
+    await update.message.reply_text("🎞 <b>Shorts:</b>", parse_mode=ParseMode.HTML)
+    for r in rows:
+        title = r["title"] or ""
+        sarlavha = (r["sarlavha"] or "").strip()
+        caption = f"🎬 <b>{html.escape(sarlavha or title)}</b>"
+        if title and sarlavha and sarlavha != title:
+            caption += f"\n📌 {html.escape(title)}"
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("▶ Tomosha qilish", callback_data=f"view_{r['anime_kod']}")
+        ]])
+        try:
+            await update.message.reply_video(
+                video=r["file_id"], caption=caption,
+                parse_mode=ParseMode.HTML, reply_markup=kb)
+        except Exception as e:
+            log.warning("Short yuborilmadi (kod %s): %s", r["anime_kod"], e)
     return ConversationHandler.END
 
 
