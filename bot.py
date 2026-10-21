@@ -546,6 +546,12 @@ ADMIN_BUTTONS = [
     "📢 Kanallar", "🚪 Foydalanuvchi Menyusi",
     "📦 Baza nusxasi", "📦 Saqlash kanali",
 ]
+# Admin panel bo'limlari (guruh tugmalari) — bosilsa ichki menyu ochiladi
+GROUP_BUTTONS = [
+    "🎬 Anime bo'limi", "📦 Baza bo'limi",
+    "📢 E'lonlar bo'limi", "⚙️ Boshqaruv bo'limi",
+]
+ADMIN_BUTTONS = ADMIN_BUTTONS + GROUP_BUTTONS
 BACK_BUTTON = "📱 Orqaga"
 
 USER_PATTERN = "^(" + "|".join(re.escape(t) for t in USER_BUTTONS) + ")$"
@@ -574,21 +580,71 @@ def back_keyboard() -> ReplyKeyboardMarkup:
 
 
 def admin_keyboard() -> ReplyKeyboardMarkup:
+    """Admin bosh paneli — bo'limlar + to'g'ridan-to'g'ri tugmalar."""
+    return ReplyKeyboardMarkup(
+        [
+            ["🎬 Anime bo'limi"],
+            ["📦 Baza bo'limi", "📢 E'lonlar bo'limi"],
+            ["⚙️ Boshqaruv bo'limi"],
+            ["📊 Statistika"],
+            ["🚪 Foydalanuvchi Menyusi"],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def anime_admin_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [
             ["➕ Anime Qo'shish", "✏️ Anime Tahrirlash"],
             ["🎞 Qism Qo'shish", "🗑 Qismlarni Tozalash"],
             ["🔄 Qismni Almashtirish"],
             ["🎬 Short Qo'shish", "🗑 Short O'chirish"],
-            ["📋 Anime Ro'yxati", "📊 Statistika"],
-            ["📢 Post Joylash", "📣 Broadcast"],
-            ["🎁 Premium Berish", "👑 Admin Qo'shish"],
-            ["🗑 Admin O'chirish"],
-            ["📢 Kanallar", "🚪 Foydalanuvchi Menyusi"],
-            ["📦 Baza nusxasi", "📦 Saqlash kanali"],
+            ["📋 Anime Ro'yxati"],
+            [BACK_BUTTON],
         ],
         resize_keyboard=True,
     )
+
+
+def baza_admin_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [
+            ["📦 Baza nusxasi", "📦 Saqlash kanali"],
+            [BACK_BUTTON],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def elonlar_admin_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [
+            ["📢 Post Joylash", "📣 Broadcast"],
+            [BACK_BUTTON],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def boshqaruv_admin_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [
+            ["🎁 Premium Berish", "👑 Admin Qo'shish"],
+            ["🗑 Admin O'chirish", "📢 Kanallar"],
+            [BACK_BUTTON],
+        ],
+        resize_keyboard=True,
+    )
+
+
+# Guruh tugmasi → ichki menyu klaviaturasi
+ADMIN_GROUPS = {
+    "🎬 Anime bo'limi": anime_admin_keyboard,
+    "📦 Baza bo'limi": baza_admin_keyboard,
+    "📢 E'lonlar bo'limi": elonlar_admin_keyboard,
+    "⚙️ Boshqaruv bo'limi": boshqaruv_admin_keyboard,
+}
 
 
 def sub_keyboard() -> InlineKeyboardMarkup:
@@ -881,6 +937,13 @@ async def admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE, text:
     uid = update.effective_user.id
     if not is_admin(uid):
         await update.message.reply_text("⛔ Bu bo'lim faqat adminlar uchun.")
+        return ConversationHandler.END
+
+    # Bo'lim tugmalari → ichki menyu (yangi oqim ochilmaydi, faqat klaviatura almashadi)
+    if text in ADMIN_GROUPS:
+        await update.message.reply_text(f"<b>{text}:</b>",
+                                        parse_mode=ParseMode.HTML,
+                                        reply_markup=ADMIN_GROUPS[text]())
         return ConversationHandler.END
 
     if text == "➕ Anime Qo'shish":
