@@ -10,7 +10,6 @@ Imkoniyatlar:
   • Majburiy obuna (kanallar bazadan)
   • Premium tizim (1/2 oylik, chek → admin tasdiq)
   • Serial qismlari (5 tadan tugmalar, hammasini yuklash)
-  • Ilova / Sayt tugmalari (/start)
   • Admin: anime qo'shish (holat tanlash bilan), qism qo'shish,
            kanalga post, admin qo'shish/o'chirish, kanallarni boshqarish
 """
@@ -24,7 +23,7 @@ import asyncio
 from datetime import datetime, timedelta
 
 import httpx  # python-telegram-bot bilan birga keladi
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update, WebAppInfo
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import (
     ApplicationBuilder,
@@ -45,8 +44,6 @@ log = logging.getLogger("uzdubanime")
 TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 SUPER_ADMIN_ID = int(os.environ.get("SUPER_ADMIN_ID", "0") or 0)
 POST_CHANNEL = "@animeb_uz"
-SITE_URL = "https://musayeva951.github.io/uzbek-animelar-olami/"
-OLD_SITE_URL = "https://animed-uz.netlify.app"
 
 ADMIN_USERNAME = "@umid_ss7"
 ADMIN_PHONE = os.environ.get("ADMIN_PHONE", "")
@@ -206,8 +203,7 @@ def _mtproto_get_size(file_id: str) -> int:
  BC_TEXT,
  POST_KOD, AD_ADD, AD_DEL, CH_ADD, CH_DEL, PCH_ADD, PCH_DEL,
  ANI_INFO, PREM_GIVE,
- SITE_BG, SITE_MUSIC,
- SHORT_KOD, SHORT_VIDEO, SHORT_TITLE, SHORT_DEL_ID) = range(31)
+ SHORT_KOD, SHORT_VIDEO, SHORT_TITLE, SHORT_DEL_ID) = range(29)
 
 # ============================== BAZA ==============================
 
@@ -260,13 +256,6 @@ def init_db() -> None:
         cur.execute("ALTER TABLE foydalanuvchilar ADD COLUMN referred_by INTEGER DEFAULT 0")
     if "ref_rewarded" not in fcols:
         cur.execute("ALTER TABLE foydalanuvchilar ADD COLUMN ref_rewarded INTEGER DEFAULT 0")
-    # sayt sozlamalari: fon rasmi va musiqa
-    cur.execute("""CREATE TABLE IF NOT EXISTS site_config (
-        key TEXT PRIMARY KEY, file_id TEXT, extra TEXT DEFAULT '')""")
-    # umumiy chat xabarlari
-    cur.execute("""CREATE TABLE IF NOT EXISTS chat_messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER, username TEXT, text TEXT, created_at TEXT)""")
     # Shorts: admin yuklagan qisqa videolar (botga joylangan animelar uchun)
     cur.execute("""CREATE TABLE IF NOT EXISTS anime_shorts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -315,29 +304,6 @@ def is_premium_active(uid: int) -> bool:
         conn.commit()
     conn.close()
     return False
-
-
-def site_get(key: str):
-    """Sayt sozlamasini olish (bg_image, music)."""
-    conn = _db()
-    row = conn.execute("SELECT file_id, extra FROM site_config WHERE key=?", (key,)).fetchone()
-    conn.close()
-    return (row["file_id"], row["extra"]) if row else (None, "")
-
-
-def site_set(key: str, file_id: str, extra: str = ""):
-    conn = _db()
-    conn.execute("INSERT OR REPLACE INTO site_config (key, file_id, extra) VALUES (?, ?, ?)",
-                 (key, file_id, extra))
-    conn.commit()
-    conn.close()
-
-
-def site_del(key: str):
-    conn = _db()
-    conn.execute("DELETE FROM site_config WHERE key=?", (key,))
-    conn.commit()
-    conn.close()
 
 
 async def check_subscription(uid: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -503,7 +469,7 @@ USER_BUTTONS = [
     "✅ Tugatigan animelar",
     "🌐 Anime ma'lumot qidiruv",
     "💎 Premium animelar", "📚 Barcha animelar",
-    "🎞 Shorts", "🌐 Web Sayt",
+    "🎞 Shorts",
     "🎁 Do'st taklif qilish",
     "📞 Murojaat",
 ]
@@ -515,7 +481,7 @@ ADMIN_BUTTONS = [
     "📋 Anime Ro'yxati", "📊 Statistika",
     "📢 Post Joylash", "📣 Broadcast",
     "🎁 Premium Berish", "👑 Admin Qo'shish",
-    "🗑 Admin O'chirish", "🌐 Sayt Sozlamalari",
+    "🗑 Admin O'chirish",
     "📢 Kanallar", "🚪 Foydalanuvchi Menyusi",
     "📦 Baza nusxasi",
 ]
@@ -534,7 +500,7 @@ def main_keyboard() -> ReplyKeyboardMarkup:
             ["✅ Tugatigan animelar"],
             ["🌐 Anime ma'lumot qidiruv"],
             ["💎 Premium animelar", "📚 Barcha animelar"],
-            ["🎞 Shorts", "🌐 Web Sayt"],
+            ["🎞 Shorts"],
             ["🎁 Do'st taklif qilish"],
             ["📞 Murojaat"],
         ],
@@ -556,7 +522,7 @@ def admin_keyboard() -> ReplyKeyboardMarkup:
             ["📋 Anime Ro'yxati", "📊 Statistika"],
             ["📢 Post Joylash", "📣 Broadcast"],
             ["🎁 Premium Berish", "👑 Admin Qo'shish"],
-            ["🗑 Admin O'chirish", "🌐 Sayt Sozlamalari"],
+            ["🗑 Admin O'chirish"],
             ["📢 Kanallar", "🚪 Foydalanuvchi Menyusi"],
             ["📦 Baza nusxasi"],
         ],
@@ -760,15 +726,6 @@ async def user_action(update: Update, context: ContextTypes.DEFAULT_TYPE, text: 
         await shorts_cmd(update, context)
         return ConversationHandler.END
 
-    if text == "🌐 Web Sayt":
-        kb = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🌐 Saytni ochish", web_app=WebAppInfo(url=SITE_URL)),
-        ]])
-        await update.message.reply_text(
-            "<b>🌐 Animed.uz web sayti:</b>\n\nAnimelarni saytda ham onlayn ko'rishingiz mumkin!",
-            parse_mode=ParseMode.HTML, reply_markup=kb)
-        return ConversationHandler.END
-
     if text == "🎁 Do'st taklif qilish":
         uid = update.effective_user.id
         bot_username = (await context.bot.get_me()).username
@@ -904,22 +861,6 @@ async def admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE, text:
             parse_mode=ParseMode.HTML, reply_markup=kb)
         return ConversationHandler.END
 
-    if text == "🌐 Sayt Sozlamalari":
-        bg_id, _ = site_get("bg_image")
-        mus_id, mus_name = site_get("music")
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🖼 Fon rasmini almashtirish", callback_data="site:bg"),
-             InlineKeyboardButton("🎵 Musiqa qo'shish", callback_data="site:music")],
-            [InlineKeyboardButton("🗑 Musiqani o'chirish", callback_data="site:delmusic")],
-        ])
-        await update.message.reply_text(
-            "<b>🌐 Sayt sozlamalari:</b>\n\n"
-            f"🖼 Fon rasmi: {'✅ o‘rnatilgan' if bg_id else '❌ yo‘q'}\n"
-            f"🎵 Musiqa: {'✅ ' + (mus_name or 'o‘rnatilgan') if mus_id else '❌ yo‘q'}\n\n"
-            "Amalni tanlang:",
-            parse_mode=ParseMode.HTML, reply_markup=kb)
-        return ConversationHandler.END
-
     if text == "🚪 Foydalanuvchi Menyusi":
         await update.message.reply_text("<b>Foydalanuvchi menyusiga qaytdingiz:</b>",
                                         parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
@@ -1035,15 +976,8 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_anime_by_kod(update.message, context.args[0], context)
         return
     name = update.effective_user.first_name or "Do'st"
-    web_kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("📱 Ilova", web_app=WebAppInfo(url=SITE_URL)),
-        InlineKeyboardButton("🌐 Sayt", url=SITE_URL),
-    ]])
     await update.message.reply_text(
-        f"Assalomu alaykum {name}, Xush kelibsiz!\n\n"
-        "🔍 Animelarni yanada osonroq topish uchun ilova yoki saytimizdan foydalaning:\n\n"
-        "👇 Pastdagi tugmalar orqali ilova yoki saytimizdan ham foydalanishingiz mumkin:",
-        reply_markup=web_kb)
+        f"Assalomu alaykum {name}, Xush kelibsiz! 👋")
     await update.message.reply_text("⬇️ Kerakli bo'limni tanlang:",
                                     reply_markup=main_keyboard())
 
@@ -1240,6 +1174,8 @@ async def ep_kod(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def _check_file_valid(file_id) -> bool:
     """file_id Telegram'da shu bot uchun yaroqli ekanini tekshiradi.
     Katta fayllar (>20MB) ham yaroqli — ular MTProto orqali uzatiladi."""
+    import json as _json
+    import urllib.request as _urlreq
     from urllib.parse import quote
     try:
         with _urlreq.urlopen(
@@ -1280,7 +1216,7 @@ async def ep_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ============================== ADMIN: SHORT QO'SHISH / O'CHIRISH ==============================
 # Admin botga joylangan anime uchun alohida qisqa video (short) yuklaydi.
-# Sayt /api/shorts orqali shu shortlarni ko'rsatadi.
+# Shortlar bazada saqlanadi; admin ularni shu botda qo'shadi va o'chiradi.
 
 async def short_kod(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.text:
@@ -1963,69 +1899,6 @@ async def pch_del(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-# ============================== SAYT SOZLAMALARI ==============================
-
-async def site_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Sayt sozlamalari: fon rasmi / musiqa."""
-    q = update.callback_query
-    await q.answer()
-    if q.data == "site:bg":
-        await q.message.reply_text("🖼 Sayt uchun yangi <b>fon rasmi yoki video</b> yuboring:",
-                                   parse_mode=ParseMode.HTML, reply_markup=back_keyboard())
-        return SITE_BG
-    if q.data == "site:music":
-        await q.message.reply_text("🎵 Sayt uchun <b>musiqa</b> (audio/MP3) yuboring:",
-                                   parse_mode=ParseMode.HTML, reply_markup=back_keyboard())
-        return SITE_MUSIC
-    if q.data == "site:delmusic":
-        site_del("music")
-        await q.message.reply_text("🗑 Sayt musiqasi o'chirildi!", reply_markup=admin_keyboard())
-        return ConversationHandler.END
-    return ConversationHandler.END
-
-
-async def site_bg_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    fid, ftype = None, "image"
-    if update.message.photo:
-        fid = update.message.photo[-1].file_id
-        ftype = "image"
-    elif update.message.video:
-        fid = update.message.video.file_id
-        ftype = "video"
-    elif update.message.animation:
-        fid = update.message.animation.file_id
-        ftype = "video"
-    if not fid:
-        await update.message.reply_text("❌ Iltimos, rasm yoki video yuboring!")
-        return SITE_BG
-    site_set("bg_image", fid, ftype)
-    # API keshini tozalash
-    _API_POSTER_CACHE.pop("site_bg", None)
-    await update.message.reply_text(f"✅ Sayt foni yangilandi! {'🎬' if ftype=='video' else '🖼'}", reply_markup=admin_keyboard())
-    return ConversationHandler.END
-
-
-async def site_music_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    fid, name = None, ""
-    if update.message.audio:
-        fid = update.message.audio.file_id
-        name = update.message.audio.title or update.message.audio.file_name or ""
-    elif update.message.voice:
-        fid = update.message.voice.file_id
-        name = "voice"
-    elif update.message.document:
-        mt = (update.message.document.mime_type or "")
-        if "audio" in mt or (update.message.document.file_name or "").lower().endswith((".mp3", ".ogg", ".m4a", ".wav")):
-            fid = update.message.document.file_id
-            name = update.message.document.file_name or ""
-    if not fid:
-        await update.message.reply_text("❌ Iltimos, musiqa (audio/MP3) yuboring!")
-        return SITE_MUSIC
-    site_set("music", fid, name)
-    await update.message.reply_text(f"✅ Sayt musiqasi qo'shildi! 🎵\n{name}", reply_markup=admin_keyboard())
-    return ConversationHandler.END
-
-
 # ============================== CALLBACK'LAR ==============================
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2039,14 +1912,6 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.message.delete()
             await q.message.reply_text("<b>Rahmat! Obuna tasdiqlandi. 🎉</b>",
                                        parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
-            # Obuna tasdiqlangach Ilova / Sayt ham chiqsin
-            web_kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton("📱 Ilova", web_app=WebAppInfo(url=SITE_URL)),
-                InlineKeyboardButton("🌐 Sayt", url=SITE_URL),
-            ]])
-            await q.message.reply_text(
-                "📱 Ilova yoki 🌐 Sayt orqali ham animelarni ko'rishingiz mumkin:",
-                reply_markup=web_kb)
         else:
             await q.answer("Siz hali barcha kanallarga a'zo bo'lmadingiz! ❌", show_alert=True)
         return
@@ -2194,7 +2059,6 @@ def build_app():
             CallbackQueryHandler(edit_cb, pattern="^edit:"),
             CallbackQueryHandler(bc_cb, pattern="^bc:"),
             CallbackQueryHandler(premgive_cb, pattern="^premgive:"),
-            CallbackQueryHandler(site_cb, pattern="^site:"),
         ],
         states={
             S_SEARCH: [menu_first, MessageHandler(txt, s_search)],
@@ -2232,9 +2096,6 @@ def build_app():
             CH_DEL: [menu_first, MessageHandler(txt, ch_del)],
             PCH_ADD: [menu_first, MessageHandler(txt, pch_add)],
             PCH_DEL: [menu_first, MessageHandler(txt, pch_del)],
-            SITE_BG: [menu_first, MessageHandler(filters.PHOTO | filters.VIDEO | filters.ANIMATION, site_bg_save)],
-            SITE_MUSIC: [menu_first,
-                         MessageHandler(filters.AUDIO | filters.VOICE | filters.Document.ALL, site_music_save)],
         },
         fallbacks=[CommandHandler("cancel", cancel_cmd)],
         allow_reentry=True,
@@ -2251,620 +2112,6 @@ def build_app():
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_error_handler(error_handler)
     return app
-
-
-# ===== HTTP API — sayt katalogi uchun (bot DB dagi animelarni beradi) =====
-import json as _json
-import threading as _threading
-import urllib.request as _urlreq
-import hashlib as _hashlib
-import hmac as _hmac
-import time as _time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-
-_API_POSTER_CACHE = {}
-
-
-def _api_db():
-    con = sqlite3.connect(DB_PATH, timeout=10)
-    con.row_factory = sqlite3.Row
-    try:
-        con.execute("PRAGMA busy_timeout=10000")
-    except Exception:
-        pass
-    return con
-
-
-def _api_anime_list():
-    con = _api_db()
-    try:
-        rows = con.execute(
-            "SELECT kod, title, caption, is_premium, holat FROM animelar ORDER BY kod DESC"
-        ).fetchall()
-        out = []
-        for r in rows:
-            cnt = con.execute(
-                "SELECT COUNT(*) c FROM serial_qismlar WHERE anime_kod=?", (r["kod"],)
-            ).fetchone()["c"]
-            out.append({
-                "kod": r["kod"],
-                "title": r["title"] or "",
-                "caption": r["caption"] or "",
-                "holat": r["holat"] or "tugatigan",
-                "is_premium": int(r["is_premium"] or 0),
-                "qism_soni": cnt,
-                "poster": "/api/poster/%d" % r["kod"],
-            })
-        return out
-    finally:
-        con.close()
-
-
-def _api_file_bytes(file_id, cache_key=None):
-    """Telegram file_id dan baytlarni olish (kichik fayllar: rasm, musiqa)."""
-    from urllib.parse import quote
-    if cache_key and cache_key in _API_POSTER_CACHE:
-        return _API_POSTER_CACHE[cache_key]
-    try:
-        with _urlreq.urlopen(
-            "https://api.telegram.org/bot%s/getFile?file_id=%s" % (TOKEN, quote(file_id, safe="")),
-            timeout=15,
-        ) as resp:
-            info = _json.loads(resp.read().decode())
-        fp = info.get("result", {}).get("file_path")
-        if not fp:
-            return None
-        with _urlreq.urlopen(
-            "https://api.telegram.org/file/bot%s/%s" % (TOKEN, fp), timeout=30
-        ) as resp:
-            data = resp.read()
-        if cache_key and len(data) < 15000000:
-            _API_POSTER_CACHE[cache_key] = data
-        return data
-    except Exception:
-        return None
-
-
-def _api_poster_bytes(kod):
-    if kod in _API_POSTER_CACHE:
-        return _API_POSTER_CACHE[kod]
-    con = _api_db()
-    try:
-        row = con.execute("SELECT file_id FROM animelar WHERE kod=?", (kod,)).fetchone()
-    finally:
-        con.close()
-    if not row or not row["file_id"]:
-        return None
-    try:
-        with _urlreq.urlopen(
-            "https://api.telegram.org/bot%s/getFile?file_id=%s" % (TOKEN, row["file_id"]),
-            timeout=15,
-        ) as resp:
-            info = _json.loads(resp.read().decode())
-        fp = info.get("result", {}).get("file_path")
-        if not fp:
-            return None
-        with _urlreq.urlopen(
-            "https://api.telegram.org/file/bot%s/%s" % (TOKEN, fp), timeout=30
-        ) as resp:
-            data = resp.read()
-        if len(data) < 5000000:
-            _API_POSTER_CACHE[kod] = data
-        return data
-    except Exception:
-        return None
-
-
-def _api_episode_file(kod, qism):
-    con = _api_db()
-    try:
-        row = con.execute(
-            "SELECT file_id, file_size FROM serial_qismlar WHERE anime_kod=? AND qism_raqam=?",
-            (kod, qism),
-        ).fetchone()
-        if not row:
-            return None, 0
-        return row["file_id"], row["file_size"] or 0
-    finally:
-        con.close()
-
-
-def _api_anime_detail(kod):
-    con = _api_db()
-    try:
-        r = con.execute(
-            "SELECT kod, title, caption, is_premium, holat FROM animelar WHERE kod=?",
-            (kod,),
-        ).fetchone()
-        if not r:
-            return None
-        eps = con.execute(
-            "SELECT qism_raqam FROM serial_qismlar WHERE anime_kod=? ORDER BY qism_raqam",
-            (kod,),
-        ).fetchall()
-        return {
-            "kod": r["kod"],
-            "title": r["title"] or "",
-            "caption": r["caption"] or "",
-            "holat": r["holat"] or "tugatigan",
-            "is_premium": int(r["is_premium"] or 0),
-            "qism_soni": len(eps),
-            "poster": "/api/poster/%d" % r["kod"],
-            "qismlar": [e["qism_raqam"] for e in eps],
-        }
-    finally:
-        con.close()
-
-
-def _api_shorts_list():
-    con = _api_db()
-    try:
-        rows = con.execute(
-            "SELECT s.id, s.anime_kod, s.sarlavha, s.yaratilgan, a.title "
-            "FROM anime_shorts s LEFT JOIN animelar a ON a.kod = s.anime_kod "
-            "ORDER BY s.id DESC"
-        ).fetchall()
-        out = []
-        for r in rows:
-            out.append({
-                "id": r["id"],
-                "anime_kod": r["anime_kod"],
-                "anime_title": r["title"] or "",
-                "sarlavha": r["sarlavha"] or "",
-                "yaratilgan": r["yaratilgan"] or "",
-                "video": "/api/shorts/video/%d" % r["id"],
-                "poster": "/api/poster/%d" % r["anime_kod"],
-            })
-        return out
-    finally:
-        con.close()
-
-
-def _api_short_file(short_id):
-    con = _api_db()
-    try:
-        row = con.execute(
-            "SELECT file_id, file_size FROM anime_shorts WHERE id = ?", (short_id,)
-        ).fetchone()
-        if not row:
-            return None, 0
-        return row["file_id"], row["file_size"] or 0
-    finally:
-        con.close()
-
-
-# ---- Sayt chat himoyasi: nom taqlidi + flood ----
-CHAT_SECRET = os.environ.get("CHAT_SECRET", "")
-API_ORIGIN = "https://musayeva951.github.io"
-
-
-def _chat_allowed(ip: str, username: str, secret: str):
-    """Ruxsat bo'lmasa sababni qaytaradi ('reserved' / 'too_fast' / 'too_many'), ruxsat bo'lsa None."""
-    name = (username or "").strip().lower().lstrip("@")
-    if "kitagawa" in name or "umid_ss7" in name or name in ("admin", "animed", "animed.uz"):
-        if secret != CHAT_SECRET:
-            return "reserved"
-    # Flood: IP aylanishi mumkin (NAT) — shuning uchun global + IP + username bo'yicha tekshiramiz.
-    # Holat DB'da (shared volume) — restart/replica'lar ham ko'radi.
-    now = datetime.now().timestamp()
-    try:
-        con = _api_db()
-        con.execute("CREATE TABLE IF NOT EXISTS chat_rate (ip TEXT, username TEXT, ts REAL)")
-        con.execute("DELETE FROM chat_rate WHERE ts < ?", (now - 3600,))
-        global_n = con.execute("SELECT COUNT(*) FROM chat_rate WHERE ts > ?", (now - 10,)).fetchone()[0]
-        if global_n >= 20:
-            return "too_many"
-        ip_rows = con.execute("SELECT ts FROM chat_rate WHERE ip = ? ORDER BY ts DESC LIMIT 1", (ip,)).fetchall()
-        if ip_rows and now - ip_rows[0][0] < 5:
-            return "too_fast"
-        ip_n = con.execute("SELECT COUNT(*) FROM chat_rate WHERE ip = ?", (ip,)).fetchone()[0]
-        if ip_n >= 30:
-            return "too_many"
-        un_rows = con.execute("SELECT ts FROM chat_rate WHERE username = ? ORDER BY ts DESC LIMIT 1", (name,)).fetchall()
-        if un_rows and now - un_rows[0][0] < 5:
-            return "too_fast"
-        con.execute("INSERT INTO chat_rate (ip, username, ts) VALUES (?, ?, ?)", (ip, name, now))
-        con.commit()
-    except Exception:
-        # DB xato bo'lsa — xabarni to'smaymiz (reserved tekshiruvi yuqorida allaqachon o'tgan)
-        return None
-    finally:
-        try:
-            con.close()
-        except Exception:
-            pass
-    return None
-
-
-class _ApiHandler(BaseHTTPRequestHandler):
-    def _send(self, code, body, ctype="application/json"):
-        data = body if isinstance(body, bytes) else body.encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Access-Control-Allow-Origin", API_ORIGIN)
-        self.send_header("X-Frame-Options", "DENY")
-        self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
-        self.wfile.write(data)
-
-    def _proxy_telegram_file(self, file_id, file_size=0, kod=None, qism=None):
-        """Telegram faylini brauzerga uzatadi (Range/seek qo'llab-quvvatlanadi)."""
-        from urllib.parse import quote
-        try:
-            with _urlreq.urlopen(
-                "https://api.telegram.org/bot%s/getFile?file_id=%s" % (TOKEN, quote(file_id, safe="")),
-                timeout=15,
-            ) as resp:
-                info = _json.loads(resp.read().decode())
-            # "file is too big" bo'lsa MTProto orqali uzatamiz
-            desc = ""
-            if not info.get("ok"):
-                desc = info.get("description", "")
-                if "too big" in desc.lower() and _pyro:
-                    return self._proxy_via_mtproto(file_id, file_size, kod, qism)
-                return self._send(404, _json.dumps({"ok": False, "err": "getFile: " + desc[:80]}))
-            fp = info.get("result", {}).get("file_path")
-            if not fp:
-                # katta fayl bo'lishi mumkin — MTProto'ga o'tamiz
-                if _pyro:
-                    return self._proxy_via_mtproto(file_id, file_size, kod, qism)
-                return self._send(404, _json.dumps({"ok": False}))
-        except Exception as e:
-            # HTTP 400 "file is too big" ham shu yerga tushadi
-            if _pyro:
-                try:
-                    return self._proxy_via_mtproto(file_id, file_size, kod, qism)
-                except Exception as me:
-                    log.warning("MTProto fallback xato: %s", me)
-                    return self._send(404, _json.dumps({"ok": False, "err": "mtproto: " + str(me)[:120]}))
-            return self._send(404, _json.dumps({"ok": False}))
-        file_url = "https://api.telegram.org/file/bot%s/%s" % (TOKEN, fp)
-        req = _urlreq.Request(file_url)
-        range_hdr = self.headers.get("Range")
-        if range_hdr:
-            req.add_header("Range", range_hdr)
-        try:
-            resp = _urlreq.urlopen(req, timeout=60)
-        except Exception:
-            return self._send(502, _json.dumps({"ok": False}))
-        code = resp.getcode()
-        self.send_response(code)
-        self.send_header("Content-Type", resp.headers.get("Content-Type", "video/mp4"))
-        if resp.headers.get("Content-Length"):
-            self.send_header("Content-Length", resp.headers.get("Content-Length"))
-        if resp.headers.get("Content-Range"):
-            self.send_header("Content-Range", resp.headers.get("Content-Range"))
-        self.send_header("Accept-Ranges", "bytes")
-        self.send_header("Access-Control-Allow-Origin", API_ORIGIN)
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
-        try:
-            while True:
-                chunk = resp.read(65536)
-                if not chunk:
-                    break
-                self.wfile.write(chunk)
-        except (BrokenPipeError, ConnectionResetError):
-            pass
-        finally:
-            resp.close()
-
-    def _proxy_via_mtproto(self, file_id, file_size, kod=None, qism=None):
-        """Katta faylni MTProto orqali uzatadi (Range qo'llab-quvvatlanadi).
-        file_size noma'lum bo'lsa (0), avtomatik aniqlab DB'ga saqlaydi."""
-        import re
-        range_hdr = self.headers.get("Range")
-        start = 0
-        if range_hdr:
-            m = re.match(r"bytes=(\d*)-(\d*)", range_hdr)
-            if m and m.group(1):
-                start = int(m.group(1))
-        start = max(0, start)
-        # Hajm noma'lum bo'lsa, MTProto orqali aniqlaymiz (bir marta)
-        unknown_size = not file_size
-        if unknown_size:
-            file_size = _mtproto_get_size(file_id)
-            if file_size and kod is not None:
-                try:
-                    con = _api_db()
-                    con.execute("UPDATE serial_qismlar SET file_size=? WHERE anime_kod=? AND qism_raqam=?",
-                                (file_size, kod, qism))
-                    con.commit()
-                    con.close()
-                except Exception:
-                    pass
-        if not file_size:
-            log.warning("MTProto: hajm aniqlanmadi file_id=%s...", file_id[:20])
-            return self._send(404, _json.dumps({"ok": False, "err": "size_unknown"}))
-        end = file_size - 1
-        # Range'da oxirgi ko'rsatilgan bo'lsa
-        if range_hdr:
-            m = re.match(r"bytes=(\d*)-(\d*)", range_hdr)
-            if m and m.group(2):
-                end = min(int(m.group(2)), file_size - 1)
-        if start > end:
-            return self._send(416, _json.dumps({"ok": False}))
-        length = end - start + 1
-        self.send_response(206 if range_hdr else 200)
-        self.send_header("Content-Type", "video/mp4")
-        self.send_header("Accept-Ranges", "bytes")
-        self.send_header("Content-Length", str(length))
-        # Brauzer yarim qolgan/eski javobni keshlab olmasin — har doim yangi so'rov
-        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
-        self.send_header("Pragma", "no-cache")
-        self.send_header("Expires", "0")
-        if range_hdr:
-            self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
-        self.send_header("Access-Control-Allow-Origin", API_ORIGIN)
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
-        CHUNK = 1024 * 1024  # 1MB
-        # Telegram upload.GetFile offset VA limitni 4096 ga karrali talab qiladi
-        # (aks holda LIMIT_INVALID). Kanonik usul (Telethon/Pyrogram kabi):
-        # har doim 1MB ga tekislangan offsetdan 1MB so'raymiz, kelgan baytni
-        # [start, end] oynasiga qirqib yozamiz. Oxirgi bo'lakda server o'zi
-        # EOF da kesadi — qoldiq limit yuborilmaydi.
-        off = (start // CHUNK) * CHUNK
-        try:
-            while off <= end:
-                data = _mtproto_fetch_sync(file_id, off, CHUNK)
-                if not data:
-                    break
-                lo = max(0, start - off)
-                hi = min(len(data), end - off + 1)
-                if hi > lo:
-                    self.wfile.write(data[lo:hi])
-                if len(data) < CHUNK:
-                    break  # EOF
-                off += CHUNK
-        except (BrokenPipeError, ConnectionResetError):
-            pass
-        except Exception as e:
-            log.warning("MTProto uzatish xato: %s", e)
-
-    def do_OPTIONS(self):
-        self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", API_ORIGIN)
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-        self.end_headers()
-
-    def do_GET(self):
-        path = self.path.split("?")[0]
-        if path == "/":
-            self._send(200, _json.dumps({"ok": True, "service": "animed-api"}))
-        elif path == "/api/animes":
-            try:
-                self._send(200, _json.dumps(
-                    {"ok": True, "animes": _api_anime_list()}, ensure_ascii=False))
-            except Exception:
-                self._send(500, _json.dumps({"ok": False, "error": "db"}))
-        elif path.startswith("/api/anime/"):
-            try:
-                kod = int(path.rsplit("/", 1)[-1])
-            except ValueError:
-                return self._send(404, _json.dumps({"ok": False}))
-            detail = _api_anime_detail(kod)
-            if not detail:
-                return self._send(404, _json.dumps({"ok": False}))
-            self._send(200, _json.dumps({"ok": True, "anime": detail}, ensure_ascii=False))
-        elif path.startswith("/api/video/"):
-            parts = path.split("?")[0].split("/")
-            try:
-                kod = int(parts[3])
-                qism = int(parts[4])
-            except (IndexError, ValueError):
-                return self._send(404, _json.dumps({"ok": False}))
-            file_id, file_size = _api_episode_file(kod, qism)
-            if not file_id:
-                return self._send(404, _json.dumps({"ok": False}))
-            return self._proxy_telegram_file(file_id, file_size, kod, qism)
-        elif path == "/api/shorts":
-            try:
-                self._send(200, _json.dumps(
-                    {"ok": True, "shorts": _api_shorts_list()}, ensure_ascii=False))
-            except Exception:
-                self._send(500, _json.dumps({"ok": False}))
-        elif path.startswith("/api/shorts/video/"):
-            try:
-                sid = int(path.rsplit("/", 1)[-1])
-            except ValueError:
-                return self._send(404, _json.dumps({"ok": False}))
-            file_id, file_size = _api_short_file(sid)
-            if not file_id:
-                return self._send(404, _json.dumps({"ok": False}))
-            return self._proxy_telegram_file(file_id, file_size)
-        elif path.startswith("/api/poster/"):
-            try:
-                kod = int(path.rsplit("/", 1)[-1])
-            except ValueError:
-                return self._send(404, _json.dumps({"ok": False}))
-            data = _api_poster_bytes(kod)
-            if not data:
-                return self._send(404, _json.dumps({"ok": False}))
-            ctype = "image/jpeg"
-            if data[:8].startswith(b"\x89PNG"):
-                ctype = "image/png"
-            elif data[:6] in (b"GIF87a", b"GIF89a"):
-                ctype = "image/gif"
-            elif data[:4] == b"RIFF":
-                ctype = "image/webp"
-            self._send(200, data, ctype)
-        elif path == "/api/site-config":
-            bg_id, bg_type = site_get("bg_image")
-            mus_id, mus_name = site_get("music")
-            self._send(200, _json.dumps({
-                "ok": True,
-                "bg": "/api/site-bg" if bg_id else None,
-                "bg_type": bg_type or "image",
-                "music": "/api/site-music" if mus_id else None,
-                "music_name": mus_name or "",
-            }, ensure_ascii=False))
-        elif path == "/api/chat":
-            # Umumiy chat: oxirgi 50 xabar
-            try:
-                con = _api_db()
-                rows = con.execute(
-                    "SELECT username, text, created_at FROM chat_messages ORDER BY id DESC LIMIT 50"
-                ).fetchall()
-                con.close()
-                msgs = [{"user": r["username"] or "Anonim", "text": r["text"],
-                         "time": r["created_at"][11:16] if r["created_at"] else ""}
-                        for r in reversed(rows)]
-                self._send(200, _json.dumps({"ok": True, "messages": msgs}, ensure_ascii=False))
-            except Exception:
-                self._send(500, _json.dumps({"ok": False}))
-        elif path == "/api/chat/send" and self.command == "POST":
-            # Umumiy chatga xabar yuborish
-            try:
-                length = int(self.headers.get("Content-Length", 0))
-                body = _json.loads(self.rfile.read(length).decode() or "{}")
-                text = (body.get("text") or "").strip()[:500]
-                username = (body.get("username") or "Anonim").strip()[:30] or "Anonim"
-                if not text:
-                    return self._send(400, _json.dumps({"ok": False}))
-                con = _api_db()
-                con.execute("INSERT INTO chat_messages (user_id, username, text, created_at) VALUES (0, ?, ?, ?)",
-                            (username, text, datetime.now().strftime(DATETIME_FMT)))
-                # Faqat oxirgi 200 xabarni saqlaymiz
-                con.execute("DELETE FROM chat_messages WHERE id NOT IN (SELECT id FROM chat_messages ORDER BY id DESC LIMIT 200)")
-                con.commit()
-                con.close()
-                self._send(200, _json.dumps({"ok": True}))
-            except Exception:
-                self._send(500, _json.dumps({"ok": False}))
-        elif path == "/api/site-bg":
-            bg_id, bg_type = site_get("bg_image")
-            if not bg_id:
-                return self._send(404, _json.dumps({"ok": False}))
-            # Video bo'lsa — proxy orqali uzatish (katta bo'lishi mumkin)
-            if bg_type == "video":
-                return self._proxy_telegram_file(bg_id)
-            data = _api_file_bytes(bg_id, "site_bg")
-            if not data:
-                return self._send(404, _json.dumps({"ok": False}))
-            ctype = "image/jpeg"
-            if data[:8].startswith(b"\x89PNG"):
-                ctype = "image/png"
-            elif data[:6] in (b"GIF87a", b"GIF89a"):
-                ctype = "image/gif"
-            elif data[:4] == b"RIFF":
-                ctype = "image/webp"
-            self._send(200, data, ctype)
-        elif path == "/api/site-music":
-            mus_id, _ = site_get("music")
-            if not mus_id:
-                return self._send(404, _json.dumps({"ok": False}))
-            return self._proxy_telegram_file(mus_id)
-        else:
-            self._send(404, _json.dumps({"ok": False}))
-
-    def do_POST(self):
-        path = self.path.split("?")[0]
-        # CORS
-        if path == "/api/chat/send":
-            try:
-                length = int(self.headers.get("Content-Length", 0))
-                body = _json.loads(self.rfile.read(length).decode() or "{}")
-                # Kirishdagi HTML teglarni tozalaymiz (XSS dan qo'shimcha himoya;
-                # chiqishda sayt baribir esc() qiladi)
-                text = re.sub(r"<[^>]*>", "", (body.get("text") or "").strip()[:500])
-                username = re.sub(r"<[^>]*>", "", (body.get("username") or "Anonim").strip()[:30]) or "Anonim"
-                if not text:
-                    return self._send(400, _json.dumps({"ok": False}))
-                ip = (self.headers.get("X-Forwarded-For", "") or "").split(",")[0].strip() or self.client_address[0]
-                deny = _chat_allowed(ip, username, body.get("secret") or "")
-                if deny == "reserved":
-                    return self._send(403, _json.dumps({"ok": False, "err": "reserved_name"}))
-                if deny in ("too_fast", "too_many"):
-                    return self._send(429, _json.dumps({"ok": False, "err": deny}))
-                con = _api_db()
-                con.execute("INSERT INTO chat_messages (user_id, username, text, created_at) VALUES (0, ?, ?, ?)",
-                            (username, text, datetime.now().strftime(DATETIME_FMT)))
-                con.execute("DELETE FROM chat_messages WHERE id NOT IN (SELECT id FROM chat_messages ORDER BY id DESC LIMIT 200)")
-                con.commit()
-                con.close()
-                self._send(200, _json.dumps({"ok": True}))
-            except Exception:
-                self._send(500, _json.dumps({"ok": False}))
-        elif path == "/api/admin/replace_episode":
-            # Admin: qism file_id almashtirish (MP3->AAC migratsiya uchun)
-            try:
-                length = int(self.headers.get("Content-Length", 0))
-                body = _json.loads(self.rfile.read(length).decode() or "{}")
-                if body.get("secret") != os.environ.get("REPLACE_SECRET", ""):
-                    return self._send(403, _json.dumps({"ok": False}))
-                kod = int(body.get("kod") or 0)
-                qism = int(body.get("qism") or 0)
-                file_id = (body.get("file_id") or "").strip()
-                file_size = int(body.get("file_size") or 0)
-                if not kod or not qism or not file_id:
-                    return self._send(400, _json.dumps({"ok": False}))
-                con = _api_db()
-                cur = con.execute(
-                    "UPDATE serial_qismlar SET file_id = ?, file_size = ? WHERE anime_kod = ? AND qism_raqam = ?",
-                    (file_id, file_size, kod, qism))
-                con.commit()
-                n = cur.rowcount
-                con.close()
-                self._send(200, _json.dumps({"ok": True, "updated": n}))
-            except Exception:
-                self._send(500, _json.dumps({"ok": False}))
-        elif path == "/api/auth/telegram":
-            # Telegram Login Widget ma'lumotini serverda tekshirish.
-            # Widget'dan kelgan hash bot tokeni bilan imzolangan bo'lishi shart.
-            try:
-                length = int(self.headers.get("Content-Length", 0))
-                body = _json.loads(self.rfile.read(length).decode() or "{}")
-                recv_hash = body.get("hash") or ""
-                auth_date = int(body.get("auth_date") or 0)
-                if not recv_hash or not auth_date:
-                    return self._send(400, _json.dumps({"ok": False, "err": "bad_auth"}))
-                if abs(int(_time.time()) - auth_date) > 86400:
-                    return self._send(403, _json.dumps({"ok": False, "err": "stale_auth"}))
-                check = {k: str(v) for k, v in body.items() if k != "hash"}
-                data_check = "\n".join("%s=%s" % (k, check[k]) for k in sorted(check))
-                secret = _hashlib.sha256(TOKEN.encode()).digest()
-                calc = _hmac.new(secret, data_check.encode(), _hashlib.sha256).hexdigest()
-                if not _hmac.compare_digest(calc, recv_hash):
-                    return self._send(403, _json.dumps({"ok": False, "err": "bad_hash"}))
-                user = {
-                    "id": int(body.get("id") or 0),
-                    "first_name": (body.get("first_name") or ""),
-                    "last_name": (body.get("last_name") or ""),
-                    "username": (body.get("username") or ""),
-                    "photo_url": (body.get("photo_url") or ""),
-                }
-                self._send(200, _json.dumps({"ok": True, "user": user}, ensure_ascii=False))
-            except Exception:
-                self._send(500, _json.dumps({"ok": False}))
-        else:
-            self._send(404, _json.dumps({"ok": False}))
-
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", API_ORIGIN)
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.end_headers()
-
-    def log_message(self, *a):
-        pass
-
-
-def start_api_server():
-    port = int(os.environ.get("PORT", "8000"))
-    try:
-        srv = ThreadingHTTPServer(("0.0.0.0", port), _ApiHandler)
-    except OSError as e:
-        print("⚠️ API server %d-portda ochilmadi: %s" % (port, e))
-        return
-    t = _threading.Thread(target=srv.serve_forever, daemon=True)
-    t.start()
-    print("🌐 API server ishga tushdi: 0.0.0.0:%d" % port)
 
 
 def _pyro_thread_main():
@@ -2887,7 +2134,6 @@ def main():
     # MTProto (katta videolar uchun) — alohida oqimda
     import threading
     threading.Thread(target=_pyro_thread_main, daemon=True).start()
-    start_api_server()
     app = build_app()
     print("AnimeD uz (PTB) boti ishga tushdi...")
     app.run_polling(drop_pending_updates=True)
