@@ -12,6 +12,8 @@ Imkoniyatlar:
   • Serial qismlari (5 tadan tugmalar, hammasini yuklash)
   • Admin: anime qo'shish (holat tanlash bilan), qism qo'shish,
            kanalga post, admin qo'shish/o'chirish, kanallarni boshqarish
+  • 📦 Ko'chma baza: poster/qismlar saqlash kanaliga ham nusxalanadi —
+           bazani boshqa botga ko'chirsangiz ham fayllar ishlayveradi
 """
 
 import html
@@ -203,7 +205,8 @@ def _mtproto_get_size(file_id: str) -> int:
  BC_TEXT,
  POST_KOD, AD_ADD, AD_DEL, CH_ADD, CH_DEL, PCH_ADD, PCH_DEL,
  ANI_INFO, PREM_GIVE,
- SHORT_KOD, SHORT_VIDEO, SHORT_TITLE, SHORT_DEL_ID) = range(29)
+ SHORT_KOD, SHORT_VIDEO, SHORT_TITLE, SHORT_DEL_ID,
+ STORAGE_CH) = range(30)
 
 # ============================== BAZA ==============================
 
@@ -226,6 +229,9 @@ def init_db() -> None:
     cols = [r[1] for r in cur.execute("PRAGMA table_info(animelar)").fetchall()]
     if "holat" not in cols:
         cur.execute("ALTER TABLE animelar ADD COLUMN holat TEXT DEFAULT 'tugatigan'")
+    # migratsiya: ko'chma baza — posterning saqlash kanalidagi xabar ID si
+    if "poster_msg_id" not in cols:
+        cur.execute("ALTER TABLE animelar ADD COLUMN poster_msg_id INTEGER DEFAULT 0")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS serial_qismlar (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -235,6 +241,9 @@ def init_db() -> None:
     sqcols = [r[1] for r in cur.execute("PRAGMA table_info(serial_qismlar)").fetchall()]
     if "file_size" not in sqcols:
         cur.execute("ALTER TABLE serial_qismlar ADD COLUMN file_size INTEGER DEFAULT 0")
+    # migratsiya: ko'chma baza — qismning saqlash kanalidagi xabar ID si
+    if "storage_msg_id" not in sqcols:
+        cur.execute("ALTER TABLE serial_qismlar ADD COLUMN storage_msg_id INTEGER DEFAULT 0")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS premium_users (
             user_id INTEGER PRIMARY KEY, tugash_vaqti TEXT
@@ -261,6 +270,12 @@ def init_db() -> None:
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         anime_kod INTEGER, file_id TEXT, file_size INTEGER DEFAULT 0,
         sarlavha TEXT DEFAULT '', yaratilgan TEXT DEFAULT '')""")
+    # migratsiya: ko'chma baza — shortning saqlash kanalidagi xabar ID si
+    shcols = [r[1] for r in cur.execute("PRAGMA table_info(anime_shorts)").fetchall()]
+    if "storage_msg_id" not in shcols:
+        cur.execute("ALTER TABLE anime_shorts ADD COLUMN storage_msg_id INTEGER DEFAULT 0")
+    # Umumiy sozlamalar (kalit-qiymat): masalan, saqlash kanali ID si
+    cur.execute("CREATE TABLE IF NOT EXISTS sozlamalar (key TEXT PRIMARY KEY, value TEXT)")
     conn.commit()
     conn.close()
 
@@ -277,6 +292,63 @@ def get_post_channels() -> list:
     rows = conn.execute("SELECT username FROM post_channels").fetchall()
     conn.close()
     return [r["username"] for r in rows]
+
+
+# ============================== SOZLAMALAR / SAQLASH KANALI ==============================
+# Ko'chma baza: yuklangan poster/qism maxfiy saqlash kanaliga ham nusxalanadi,
+# bazada kanal xabar ID lari saqlanadi. Bazani boshqa botga ko'chirganda file_id
+# ishlamasa ham, shu kanalga admin bo'lgan har qanday bot kontentni copy_message
+# bilan yubora oladi — baza to'liq ko'chma bo'lib qoladi.
+
+def get_setting(key: str, default: str = "") -> str:
+    try:
+        conn = _db()
+        row = conn.execute("SELECT value FROM sozlamalar WHERE key = ?", (key,)).fetchone()
+        conn.close()
+        return row["value"] if row and row["value"] is not None else default
+    except Exception:
+        return default
+
+
+def set_setting(key: str, value: str) -> None:
+    conn = _db()
+    if value:
+        conn.execute("INSERT OR REPLACE INTO sozlamalar (key, value) VALUES (?, ?)", (key, value))
+    else:
+        conn.execute("DELETE FROM sozlamalar WHERE key = ?", (key,))
+    conn.commit()
+    conn.close()
+
+
+def get_storage_channel():
+    """Saqlash kanali: avval env STORAGE_CHANNEL_ID, keyin bazadagi sozlama.
+    Kanal ID (int) yoki @username qaytaradi; ulanmagan bo'lsa None."""
+    raw = (os.environ.get("STORAGE_CHANNEL_ID", "").strip()
+           or get_setting("storage_channel").strip())
+    if not raw:
+        return None
+    if raw.startswith("@"):
+        return raw
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+async def _storage_copy(context: ContextTypes.DEFAULT_TYPE,
+                        from_chat_id: int, message_id: int) -> int:
+    """Xabarni saqlash kanaliga nusxalaydi va kanaldagi message_id ni qaytaradi.
+    Kanal ulanmagan yoki xato bo'lsa 0 — yuklash oqimi baribir davom etadi."""
+    storage = get_storage_channel()
+    if not storage or not message_id:
+        return 0
+    try:
+        mid = await context.bot.copy_message(
+            chat_id=storage, from_chat_id=from_chat_id, message_id=message_id)
+        return mid.message_id
+    except Exception as e:
+        log.warning("Saqlash kanaliga nusxalab bo'lmadi: %s", e)
+        return 0
 
 
 def is_admin(uid: int) -> bool:
@@ -472,7 +544,7 @@ ADMIN_BUTTONS = [
     "🎁 Premium Berish", "👑 Admin Qo'shish",
     "🗑 Admin O'chirish",
     "📢 Kanallar", "🚪 Foydalanuvchi Menyusi",
-    "📦 Baza nusxasi",
+    "📦 Baza nusxasi", "📦 Saqlash kanali",
 ]
 BACK_BUTTON = "📱 Orqaga"
 
@@ -513,7 +585,7 @@ def admin_keyboard() -> ReplyKeyboardMarkup:
             ["🎁 Premium Berish", "👑 Admin Qo'shish"],
             ["🗑 Admin O'chirish"],
             ["📢 Kanallar", "🚪 Foydalanuvchi Menyusi"],
-            ["📦 Baza nusxasi"],
+            ["📦 Baza nusxasi", "📦 Saqlash kanali"],
         ],
         resize_keyboard=True,
     )
@@ -530,11 +602,59 @@ def sub_keyboard() -> InlineKeyboardMarkup:
 
 # ============================== ANIME KO'RSATISH ==============================
 
+def _row_msg_id(row, key: str) -> int:
+    """SQLite qatordan kanal xabar ID sini xavfsiz oladi (ustun bo'lmasa 0)."""
+    try:
+        return row[key] or 0
+    except Exception:
+        return 0
+
+
+async def _send_poster(context: ContextTypes.DEFAULT_TYPE, chat_id,
+                       file_id, poster_msg_id: int, caption, reply_markup) -> None:
+    """Posterni yuboradi: avval saqlash kanalidan copy (ko'chma yo'l),
+    xato bo'lsa yoki kanal bo'lmasa — file_id bilan (rasm, keyin video fallback)."""
+    storage = get_storage_channel()
+    if storage and poster_msg_id:
+        try:
+            await context.bot.copy_message(
+                chat_id=chat_id, from_chat_id=storage, message_id=poster_msg_id,
+                caption=caption, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+            return
+        except Exception as e:
+            log.warning("Poster kanaldan yuborilmadi, file_id ishlatiladi: %s", e)
+    try:
+        await context.bot.send_photo(chat_id=chat_id, photo=file_id,
+                                     caption=caption, parse_mode=ParseMode.HTML,
+                                     reply_markup=reply_markup)
+    except Exception:
+        await context.bot.send_video(chat_id=chat_id, video=file_id,
+                                     caption=caption, parse_mode=ParseMode.HTML,
+                                     reply_markup=reply_markup)
+
+
+async def _send_episode(context: ContextTypes.DEFAULT_TYPE, chat_id,
+                        row, caption: str) -> None:
+    """Qismni yuboradi: avval saqlash kanalidan copy (ko'chma yo'l),
+    xato bo'lsa yoki kanal bo'lmasa — file_id bilan."""
+    storage = get_storage_channel()
+    msg_id = _row_msg_id(row, "storage_msg_id")
+    if storage and msg_id:
+        try:
+            await context.bot.copy_message(
+                chat_id=chat_id, from_chat_id=storage, message_id=msg_id,
+                caption=caption)
+            return
+        except Exception as e:
+            log.warning("Qism kanaldan yuborilmadi, file_id ishlatiladi: %s", e)
+    await context.bot.send_video(chat_id=chat_id, video=row["file_id"], caption=caption)
+
+
 async def _display_anime(chat_id: int, uid: int, kod_text: str,
                          context: ContextTypes.DEFAULT_TYPE) -> None:
     conn = _db()
     anime = conn.execute(
-        "SELECT file_id, caption, title, is_premium, search_count FROM animelar WHERE kod = ?",
+        "SELECT file_id, caption, title, is_premium, search_count, poster_msg_id FROM animelar WHERE kod = ?",
         (kod_text,),
     ).fetchone()
 
@@ -588,15 +708,10 @@ async def _display_anime(chat_id: int, uid: int, kod_text: str,
         rows.append([InlineKeyboardButton(f"📥 Yuklash (1-{len(qismlar)})",
                                           callback_data=f"all_download_{kod_text}")])
 
-    # Poster — rasm (photo.file_id). Eski video-posterlar uchun fallback.
-    try:
-        await context.bot.send_photo(chat_id=chat_id, photo=anime["file_id"],
-                                     caption=caption, parse_mode=ParseMode.HTML,
-                                     reply_markup=InlineKeyboardMarkup(rows) if rows else None)
-    except Exception:
-        await context.bot.send_video(chat_id=chat_id, video=anime["file_id"],
-                                     caption=caption, parse_mode=ParseMode.HTML,
-                                     reply_markup=InlineKeyboardMarkup(rows) if rows else None)
+    # Poster: avval saqlash kanalidan copy (ko'chma), bo'lmasa file_id (rasm/video fallback)
+    await _send_poster(context, chat_id, anime["file_id"],
+                       _row_msg_id(anime, "poster_msg_id"), caption,
+                       InlineKeyboardMarkup(rows) if rows else None)
 
 
 async def send_anime_by_kod(message, kod_text: str, context: ContextTypes.DEFAULT_TYPE):
@@ -627,7 +742,7 @@ async def shorts_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tagida o'sha animeni ochadigan "Tomosha qilish" tugmasi bilan."""
     conn = _db()
     rows = conn.execute(
-        "SELECT s.file_id, s.sarlavha, s.anime_kod, a.title FROM anime_shorts s "
+        "SELECT s.file_id, s.sarlavha, s.anime_kod, s.storage_msg_id, a.title FROM anime_shorts s "
         "LEFT JOIN animelar a ON a.kod = s.anime_kod ORDER BY s.id DESC LIMIT 10"
     ).fetchall()
     conn.close()
@@ -645,12 +760,26 @@ async def shorts_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb = InlineKeyboardMarkup([[
             InlineKeyboardButton("▶ Tomosha qilish", callback_data=f"view_{r['anime_kod']}")
         ]])
-        try:
-            await update.message.reply_video(
-                video=r["file_id"], caption=caption,
-                parse_mode=ParseMode.HTML, reply_markup=kb)
-        except Exception as e:
-            log.warning("Short yuborilmadi (kod %s): %s", r["anime_kod"], e)
+        # Avval saqlash kanalidan copy (ko'chma yo'l), bo'lmasa file_id
+        sent = False
+        storage = get_storage_channel()
+        smsg = _row_msg_id(r, "storage_msg_id")
+        if storage and smsg:
+            try:
+                await context.bot.copy_message(
+                    chat_id=update.message.chat.id, from_chat_id=storage,
+                    message_id=smsg, caption=caption,
+                    parse_mode=ParseMode.HTML, reply_markup=kb)
+                sent = True
+            except Exception as e:
+                log.warning("Short kanaldan yuborilmadi (kod %s): %s", r["anime_kod"], e)
+        if not sent:
+            try:
+                await update.message.reply_video(
+                    video=r["file_id"], caption=caption,
+                    parse_mode=ParseMode.HTML, reply_markup=kb)
+            except Exception as e:
+                log.warning("Short yuborilmadi (kod %s): %s", r["anime_kod"], e)
     return ConversationHandler.END
 
 
@@ -861,6 +990,33 @@ async def admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE, text:
         await update.message.reply_text("<b>Foydalanuvchi menyusiga qaytdingiz:</b>",
                                         parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
         return ConversationHandler.END
+
+    if text == "📦 Saqlash kanali":
+        if uid != SUPER_ADMIN_ID:
+            return ConversationHandler.END
+        cur_ch = get_storage_channel()
+        from_env = bool(os.environ.get("STORAGE_CHANNEL_ID", "").strip())
+        if cur_ch:
+            holat = f"✅ Ulangan: <code>{cur_ch}</code>" + (" (env orqali)" if from_env else "")
+        else:
+            holat = "❌ Kanal ulanmagan"
+        kb = None
+        if cur_ch and not from_env:
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🗑 Kanalni o'chirish", callback_data="storage_del"),
+            ]])
+        await update.message.reply_text(
+            "<b>📦 Saqlash kanali (ko'chma baza)</b>\n\n"
+            f"Hozirgi holat: {holat}\n\n"
+            "Bu kanalga yuklangan har bir poster/qism nusxalanadi. Bazani boshqa "
+            "botga ko'chirsangiz, o'sha bot shu kanalga admin bo'lsa — fayllar "
+            "file_id siz ham ishlayveradi.\n\n"
+            "📌 <b>Kanalni ulash:</b>\n"
+            "1️⃣ Maxfiy kanal oching va botni unga <b>admin</b> qiling\n"
+            "2️⃣ Kanaldagi biror xabarni shu yerga <b>forward</b> qiling\n"
+            "   yoki kanal ID sini matn qilib yuboring (masalan: <code>-1001234567890</code>)",
+            parse_mode=ParseMode.HTML, reply_markup=kb or back_keyboard())
+        return STORAGE_CH
 
     if text == "📦 Baza nusxasi":
         if uid != SUPER_ADMIN_ID:
@@ -1112,6 +1268,13 @@ async def a_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     conn.commit()
     conn.close()
+    # Ko'chma baza: posterni saqlash kanaliga ham nusxalaymiz (xato bo'lsa ham davom etamiz)
+    poster_msg = await _storage_copy(context, update.message.chat_id, update.message.message_id)
+    if poster_msg:
+        conn = _db()
+        conn.execute("UPDATE animelar SET poster_msg_id = ? WHERE kod = ?", (poster_msg, kod))
+        conn.commit()
+        conn.close()
     context.user_data["new_kod"] = kod
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("🎬 Kino", callback_data="holat_kino"),
@@ -1196,10 +1359,19 @@ async def ep_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kod = context.user_data["ep_kod"]
     qism = context.user_data["ep_next"]
     conn = _db()
-    conn.execute("INSERT INTO serial_qismlar (anime_kod, qism_raqam, file_id, file_size) VALUES (?, ?, ?, ?)",
-                 (kod, qism, fid, update.message.video.file_size or 0))
+    cur = conn.execute("INSERT INTO serial_qismlar (anime_kod, qism_raqam, file_id, file_size) VALUES (?, ?, ?, ?)",
+                       (kod, qism, fid, update.message.video.file_size or 0))
+    ep_row_id = cur.lastrowid
     conn.commit()
     conn.close()
+    # Ko'chma baza: qismni saqlash kanaliga ham nusxalaymiz (xato bo'lsa ham davom etamiz)
+    storage_msg = await _storage_copy(context, update.message.chat_id, update.message.message_id)
+    if storage_msg:
+        conn = _db()
+        conn.execute("UPDATE serial_qismlar SET storage_msg_id = ? WHERE id = ?",
+                     (storage_msg, ep_row_id))
+        conn.commit()
+        conn.close()
     next_qism = qism + 1
     context.user_data["ep_next"] = next_qism
     await update.message.reply_text(
@@ -1243,6 +1415,9 @@ async def short_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return SHORT_VIDEO
     context.user_data["short_file_id"] = update.message.video.file_id
     context.user_data["short_file_size"] = update.message.video.file_size or 0
+    # Ko'chma baza: shortni ham saqlash kanaliga nusxalaymiz (sarlavha bosqichida bazaga yoziladi)
+    context.user_data["short_storage_msg"] = await _storage_copy(
+        context, update.message.chat_id, update.message.message_id)
     await update.message.reply_text(
         "✏️ Short uchun <b>sarlavha</b> yozing (o'tkazib yuborish uchun — yuboring):",
         parse_mode=ParseMode.HTML, reply_markup=back_keyboard())
@@ -1261,8 +1436,9 @@ async def short_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     conn = _db()
     cur = conn.execute(
-        "INSERT INTO anime_shorts (anime_kod, file_id, file_size, sarlavha, yaratilgan) VALUES (?, ?, ?, ?, ?)",
-        (kod, fid, fsize, sarlavha, datetime.now().strftime(DATETIME_FMT)))
+        "INSERT INTO anime_shorts (anime_kod, file_id, file_size, sarlavha, yaratilgan, storage_msg_id) VALUES (?, ?, ?, ?, ?, ?)",
+        (kod, fid, fsize, sarlavha, datetime.now().strftime(DATETIME_FMT),
+         context.user_data.get("short_storage_msg", 0)))
     short_id = cur.lastrowid
     conn.commit()
     conn.close()
@@ -1344,9 +1520,11 @@ async def ep_rep_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     fid = update.message.video.file_id
     kod = context.user_data["rep_kod"]
     qism = context.user_data["rep_qism"]
+    # Yangi video uchun yangi nusxa; bo'lmasa eski nusxa ID si yaroqsiz bo'lib qoladi (0 yozamiz)
+    storage_msg = await _storage_copy(context, update.message.chat_id, update.message.message_id)
     conn = _db()
-    conn.execute("UPDATE serial_qismlar SET file_id = ?, file_size = ? WHERE anime_kod = ? AND qism_raqam = ?",
-                 (fid, update.message.video.file_size or 0, kod, qism))
+    conn.execute("UPDATE serial_qismlar SET file_id = ?, file_size = ?, storage_msg_id = ? WHERE anime_kod = ? AND qism_raqam = ?",
+                 (fid, update.message.video.file_size or 0, storage_msg, kod, qism))
     conn.commit()
     conn.close()
     await update.message.reply_text(
@@ -1606,8 +1784,10 @@ async def edit_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Iltimos, faqat video yuboring!")
         return EDIT_VIDEO
     fid = update.message.video.file_id
+    # Yangi poster uchun yangi nusxa; bo'lmasa eski nusxa ID si yaroqsiz bo'lib qoladi (0 yozamiz)
+    poster_msg = await _storage_copy(context, update.message.chat_id, update.message.message_id)
     conn = _db()
-    conn.execute("UPDATE animelar SET file_id = ? WHERE kod = ?", (fid, kod))
+    conn.execute("UPDATE animelar SET file_id = ?, poster_msg_id = ? WHERE kod = ?", (fid, poster_msg, kod))
     conn.commit()
     conn.close()
     context.user_data.pop("edit_kod", None)
@@ -1740,7 +1920,7 @@ async def post_kod(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return POST_KOD
     kod = update.message.text.strip()
     conn = _db()
-    anime = conn.execute("SELECT file_id, title, is_premium FROM animelar WHERE kod = ?", (kod,)).fetchone()
+    anime = conn.execute("SELECT file_id, title, is_premium, poster_msg_id FROM animelar WHERE kod = ?", (kod,)).fetchone()
     if not anime:
         conn.close()
         await update.message.reply_text("❌ Bunday kodli anime topilmadi!")
@@ -1766,9 +1946,8 @@ async def post_kod(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ok, fails = [], []
     for ch in targets:
         try:
-            await context.bot.send_photo(
-                chat_id="@" + ch.lstrip("@"), photo=anime["file_id"],
-                caption=caption, parse_mode=ParseMode.HTML, reply_markup=kb)
+            await _send_poster(context, "@" + ch.lstrip("@"), anime["file_id"],
+                               _row_msg_id(anime, "poster_msg_id"), caption, kb)
             ok.append("@" + ch.lstrip("@"))
         except Exception as e:
             fails.append(f"@{ch.lstrip('@')} — {e}")
@@ -1895,6 +2074,74 @@ async def pch_del(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+# ============================== ADMIN: SAQLASH KANALI ==============================
+
+async def storage_set(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Saqlash kanalini ulaydi: admin kanal xabarini forward qiladi
+    (forward_origin / forward_from_chat dan chat ID olinadi) yoki
+    '-100...' ko'rinishidagi ID ni matn qilib yuboradi."""
+    if update.effective_user.id != SUPER_ADMIN_ID:
+        return ConversationHandler.END
+    msg = update.message
+    chat_id = None
+    origin = getattr(msg, "forward_origin", None)
+    if origin is not None:
+        ochat = getattr(origin, "chat", None)
+        if ochat is not None:
+            chat_id = ochat.id
+    if chat_id is None:
+        fchat = getattr(msg, "forward_from_chat", None)
+        if fchat is not None:
+            chat_id = fchat.id
+    if chat_id is None and msg.text:
+        t = msg.text.strip()
+        if re.fullmatch(r"-100\d{6,}", t):
+            chat_id = int(t)
+    if chat_id is None:
+        await msg.reply_text(
+            "❌ Kanal aniqlanmadi. Kanaldagi biror xabarni <b>forward</b> qiling yoki "
+            "kanal ID sini yuboring (masalan: <code>-1001234567890</code>).",
+            parse_mode=ParseMode.HTML, reply_markup=back_keyboard())
+        return STORAGE_CH
+    # Bot shu kanalda admin ekanini oldindan tekshiramiz — bo'lmasa nusxalash ishlamaydi
+    try:
+        me = await context.bot.get_me()
+        member = await context.bot.get_chat_member(chat_id, me.id)
+        if member.status not in ("administrator", "creator"):
+            await msg.reply_text(
+                "⚠️ Bot shu kanalda <b>admin emas</b>! Avval botni kanalga admin qiling, "
+                "keyin xabarni qayta yuboring.",
+                parse_mode=ParseMode.HTML, reply_markup=back_keyboard())
+            return STORAGE_CH
+    except Exception as e:
+        await msg.reply_text(
+            f"❌ Kanal tekshiruvida xato: {e}\nBot kanalda admin ekanini tekshirib, qayta yuboring.",
+            reply_markup=back_keyboard())
+        return STORAGE_CH
+    set_setting("storage_channel", str(chat_id))
+    await msg.reply_text(
+        f"✅ Saqlash kanali ulandi: <code>{chat_id}</code>\n\n"
+        "Endi yangi yuklangan poster/qismlar shu kanalga ham nusxalanadi — "
+        "baza to'liq ko'chma bo'ladi.",
+        parse_mode=ParseMode.HTML, reply_markup=admin_keyboard())
+    return ConversationHandler.END
+
+
+async def storage_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Saqlash kanalini o'chirish tugmasi."""
+    q = update.callback_query
+    await q.answer()
+    if q.from_user.id != SUPER_ADMIN_ID:
+        return ConversationHandler.END
+    if q.data == "storage_del":
+        set_setting("storage_channel", "")
+        await q.message.reply_text(
+            "🗑 Saqlash kanali uzildi. Yangi yuklamalar endi kanalga nusxalanmaydi "
+            "(bazadagi eski nusxa ID lari saqlanib qoladi).",
+            reply_markup=admin_keyboard())
+    return ConversationHandler.END
+
+
 # ============================== CALLBACK'LAR ==============================
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1986,19 +2233,18 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.answer("🔒 Premium obuna kerak!", show_alert=True)
             return
         row = conn.execute(
-            "SELECT file_id FROM serial_qismlar WHERE anime_kod = ? AND qism_raqam = ?",
+            "SELECT file_id, storage_msg_id FROM serial_qismlar WHERE anime_kod = ? AND qism_raqam = ?",
             (kod, qism)).fetchone()
         conn.close()
         if row:
-            await context.bot.send_video(chat_id=q.message.chat.id, video=row["file_id"],
-                                         caption=f"🎞 {qism}-qism")
+            await _send_episode(context, q.message.chat.id, row, f"🎞 {qism}-qism")
         return
 
     if data.startswith("all_download_"):
         kod = data.split("_")[2]
         conn = _db()
         qismlar = conn.execute(
-            "SELECT qism_raqam, file_id FROM serial_qismlar WHERE anime_kod = ? ORDER BY qism_raqam ASC",
+            "SELECT qism_raqam, file_id, storage_msg_id FROM serial_qismlar WHERE anime_kod = ? ORDER BY qism_raqam ASC",
             (kod,)).fetchall()
         conn.close()
         if not qismlar:
@@ -2007,8 +2253,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer("Barcha qismlar yuborilmoqda... 📥")
         import asyncio
         for r in qismlar:
-            await context.bot.send_video(chat_id=q.message.chat.id, video=r["file_id"],
-                                         caption=f"🎞 {r['qism_raqam']}-qism")
+            await _send_episode(context, q.message.chat.id, r, f"🎞 {r['qism_raqam']}-qism")
             await asyncio.sleep(0.5)
         return
 
@@ -2101,6 +2346,7 @@ def build_app():
             CallbackQueryHandler(edit_cb, pattern="^edit:"),
             CallbackQueryHandler(bc_cb, pattern="^bc:"),
             CallbackQueryHandler(premgive_cb, pattern="^premgive:"),
+            CallbackQueryHandler(storage_cb, pattern="^storage_"),
         ],
         states={
             S_SEARCH: [menu_first, MessageHandler(txt, s_search)],
@@ -2138,6 +2384,9 @@ def build_app():
             CH_DEL: [menu_first, MessageHandler(txt, ch_del)],
             PCH_ADD: [menu_first, MessageHandler(txt, pch_add)],
             PCH_DEL: [menu_first, MessageHandler(txt, pch_del)],
+            STORAGE_CH: [menu_first,
+                         CallbackQueryHandler(storage_cb, pattern="^storage_"),
+                         MessageHandler(filters.ALL & ~filters.COMMAND, storage_set)],
         },
         fallbacks=[CommandHandler("cancel", cancel_cmd)],
         allow_reentry=True,
