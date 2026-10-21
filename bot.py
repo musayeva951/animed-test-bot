@@ -2036,6 +2036,52 @@ async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ============================== ISHGA TUSHIRISH ==============================
 
+# ============================== MEDIA KO'CHIRISH (qabul) ==============================
+_mig_state = {"posters": 0, "episodes": 0}
+
+
+async def mig_receive(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Kanal orqali asosiy botdan kelgan fayllarni yangi bot nomiga yozish."""
+    msg = update.channel_post
+    if msg is None:
+        return
+    cap = msg.caption or ""
+    conn = None
+    try:
+        if cap.startswith("MIGP|") and msg.photo:
+            kod = cap.split("|", 1)[1].strip()
+            conn = _db()
+            conn.execute("UPDATE animelar SET file_id = ? WHERE kod = ?",
+                         (msg.photo[-1].file_id, kod))
+            conn.commit()
+            _mig_state["posters"] += 1
+        elif cap.startswith("MIG|") and msg.video:
+            parts = cap.split("|")
+            if len(parts) == 3:
+                _, kod, qism = parts
+                conn = _db()
+                conn.execute(
+                    "UPDATE serial_qismlar SET file_id = ? WHERE anime_kod = ? AND qism_raqam = ?",
+                    (msg.video.file_id, kod.strip(), int(qism)))
+                conn.commit()
+                _mig_state["episodes"] += 1
+        elif (msg.text or "").startswith("MIGDONE"):
+            try:
+                await context.bot.send_message(
+                    SUPER_ADMIN_ID,
+                    "✅ Media ko'chirish tugadi.\n"
+                    f"Posterlar: {_mig_state['posters']}\n"
+                    f"Qismlar: {_mig_state['episodes']}\n"
+                    f"Asosiy bot xabari: {msg.text}")
+            except Exception:
+                pass
+    except Exception as e:
+        log.warning("mig_receive xato: %s", e)
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def build_app():
     init_db()
     builder = ApplicationBuilder().token(TOKEN)
@@ -2106,6 +2152,7 @@ def build_app():
     # Suhbat bo'lmaganda: user tugmalari va Orqaga
     app.add_handler(MessageHandler(filters.Regex("^.*Orqaga.*$"), menu_router))
     app.add_handler(CallbackQueryHandler(on_callback))
+    app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST, mig_receive))
     app.add_error_handler(error_handler)
     return app
 
