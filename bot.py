@@ -1,5 +1,5 @@
 """
-AnimeD uz — python-telegram-bot versiyasi (professional panel dizayni).
+Uzbek Animelar Olami — python-telegram-bot versiyasi (professional panel dizayni).
 (aiogram Termux/Android'da o'rnatilmaydigan muhitlar uchun)
 
 Imkoniyatlar:
@@ -873,8 +873,8 @@ async def admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE, text:
                 await context.bot.send_document(
                     chat_id=uid,
                     document=f,
-                    filename=f"animed_backup_{stamp}.db",
-                    caption=f"📦 AnimeD uz baza nusxasi\n📅 {stamp}\n💾 Hajmi: {size / 1024:.0f} KB",
+                    filename=f"uzbek_animelar_backup_{stamp}.db",
+                    caption=f"📦 Uzbek Animelar Olami baza nusxasi\n📅 {stamp}\n💾 Hajmi: {size / 1024:.0f} KB",
                 )
             await update.message.reply_text("✅ Baza nusxasi yuborildi.")
         except Exception as e:
@@ -2178,7 +2178,7 @@ def main():
     import threading
     threading.Thread(target=_pyro_thread_main, daemon=True).start()
     app = build_app()
-    print("AnimeD uz (PTB) boti ishga tushdi...")
+    print("Uzbek Animelar Olami (PTB) boti ishga tushdi...")
     app.run_polling(drop_pending_updates=True)
 
 
